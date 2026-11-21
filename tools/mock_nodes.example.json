@@ -1,0 +1,25 @@
+{
+  "files_dir": "/tmp/savebit-files",
+  "nodes": [
+    {
+      "id": "8d1f0c2a-0000-4000-8000-000000000001",
+      "name": "in-msk-1",
+      "role": "entry",
+      "keys": ["sbn_entry_test_key_change_me"],
+      "interval": 60,
+      "xray": { "version": "26.11.9" },
+      "tls": [ { "name": "hy2", "cn": "www.example.com" } ],
+      "config_file": "../examples/entry.json"
+    },
+    {
+      "id": "8d1f0c2a-0000-4000-8000-000000000002",
+      "name": "out-de-1",
+      "role": "exit",
+      "keys": ["sbn_exit_test_key_change_me"],
+      "interval": 60,
+      "xray": { "version": "26.11.9" },
+      "tls": [ { "name": "hy2", "cn": "www.example.com" } ],
+      "config_file": "../examples/exit.json"
+    }
+  ]
+}

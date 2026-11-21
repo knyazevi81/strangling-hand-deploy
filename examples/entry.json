@@ -1,0 +1,299 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "api": {
+    "tag": "api",
+    "listen": "127.0.0.1:10085",
+    "services": [
+      "HandlerService",
+      "StatsService",
+      "RoutingService",
+      "ObservatoryService"
+    ]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "in-reality",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "86f9c549-2c21-480a-94ed-99665e7c30af",
+            "flow": "xtls-rprx-vision",
+            "email": "friend-1"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "target": "max.ru:443",
+          "serverNames": [
+            "max.ru",
+            "www.max.ru"
+          ],
+          "privateKey": "QAnR1zuGe_4I6tT3vIoBl8bnE0elOKMKypOlTYEQ1kQ",
+          "shortIds": [
+            "",
+            "a1b2c3d4"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "in-xhttp",
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "86f9c549-2c21-480a-94ed-99665e7c30af",
+            "email": "friend-1"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "/f3a9c1",
+          "mode": "auto"
+        },
+        "security": "reality",
+        "realitySettings": {
+          "target": "max.ru:443",
+          "serverNames": [
+            "max.ru",
+            "www.max.ru"
+          ],
+          "privateKey": "QAnR1zuGe_4I6tT3vIoBl8bnE0elOKMKypOlTYEQ1kQ",
+          "shortIds": [
+            "e5f6a7b8"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "in-hy2",
+      "listen": "0.0.0.0",
+      "port": "443,20000-20050",
+      "protocol": "hysteria",
+      "settings": {
+        "version": 2,
+        "clients": [
+          {
+            "auth": "hy2-friend-1-Zk3pQ9",
+            "email": "friend-1"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "hysteriaSettings": {
+          "version": 2
+        },
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": [
+            "h3"
+          ],
+          "certificates": [
+            {
+              "certificateFile": "${TLS_DIR}/hy2.crt",
+              "keyFile": "${TLS_DIR}/hy2.key"
+            }
+          ]
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "salamander",
+              "settings": {
+                "password": "salamander-entry-Qw81"
+              }
+            }
+          ],
+          "quicParams": {
+            "congestion": "brutal",
+            "brutalUp": "200 mbps",
+            "brutalDown": "200 mbps"
+          }
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "exit-de-xhttp",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "203.0.113.10",
+            "port": 443,
+            "users": [
+              {
+                "id": "2334e996-c61c-4407-adb4-b9b98a8307b6",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "/r7d2e9",
+          "mode": "auto"
+        },
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "www.microsoft.com",
+          "publicKey": "3ou-tiFVA0XNicbVS3JDyCZovjPnoYRC1fQ3xAxGsns",
+          "shortId": "0c1d2e3f",
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "tag": "exit-de-hy2",
+      "protocol": "hysteria",
+      "settings": {
+        "version": 2,
+        "address": "203.0.113.10",
+        "port": 443
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "hysteriaSettings": {
+          "version": 2,
+          "auth": "hy2-relay-Lm40Tx"
+        },
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "www.example.com",
+          "alpn": [
+            "h3"
+          ],
+          "pinnedPeerCertSha256": "C6:FA:B0:88:48:7C:09:1A:BC:32:79:C3:8F:9C:67:3D:C7:10:5B:30:96:EB:1B:6E:83:00:07:94:A8:56:DF:1F"
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "salamander",
+              "settings": {
+                "password": "salamander-exit-Vb52"
+              }
+            }
+          ],
+          "quicParams": {
+            "keepAlivePeriod": 5,
+            "maxIdleTimeout": 10
+          }
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "observatory": {
+    "subjectSelector": [
+      "exit-"
+    ],
+    "probeURL": "https://www.gstatic.com/generate_204",
+    "probeInterval": "10s",
+    "enableConcurrency": true
+  },
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [
+      {
+        "tag": "exits",
+        "selector": [
+          "exit-"
+        ],
+        "strategy": {
+          "type": "leastPing"
+        },
+        "fallbackTag": "exit-de-xhttp"
+      }
+    ],
+    "rules": [
+      {
+        "inboundTag": [
+          "api"
+        ],
+        "outboundTag": "api"
+      },
+      {
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "inboundTag": [
+          "in-reality",
+          "in-xhttp",
+          "in-hy2"
+        ],
+        "balancerTag": "exits"
+      }
+    ]
+  }
+}
