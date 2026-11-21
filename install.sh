@@ -53,7 +53,7 @@ command -v systemctl >/dev/null || die "нужен systemd"
 # Вопросы задаём через терминал: при запуске через «curl | bash» stdin занят самим скриптом.
 ask() { # ask "Вопрос" ПЕРЕМЕННАЯ [скрыть=1]
   local prompt="$1" var="$2" hide="${3:-0}" answer=""
-  [ -r /dev/tty ] || die "нет терминала для вопроса «$prompt». Передай значение параметром (см. --help)"
+  [ -r /dev/tty ] || die "нет терминала для вопроса «${prompt}». Передай значение параметром (см. --help)"
   if [ "$hide" = 1 ]; then
     read -r -s -p "$prompt" answer </dev/tty; echo >/dev/tty
   else
@@ -96,7 +96,9 @@ echo
 [ -n "$KEY" ] || ask "Ключ узла: " KEY 1
 KEY="$(printf '%s' "$KEY" | tr -d '[:space:]')"
 [ -n "$KEY" ] || die "ключ не указан"
-if [ -z "$API" ]; then
+if [ -z "$API" ] && [ "$YES" = 1 ]; then
+  API="$DEFAULT_API"
+elif [ -z "$API" ]; then
   ask "Домен API [$DEFAULT_API]: " API
   API="${API:-$DEFAULT_API}"
 fi
@@ -148,9 +150,9 @@ NODE_NAME="$(printf '%s' "$NODE_JSON" | python3 -c 'import json,sys; print(json.
 NODE_ROLE="$(printf '%s' "$NODE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["role"])')"
 XRAY_VER="$(printf '%s' "$NODE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["xray"])')"
 ROLE_RU="вход"; [ "$NODE_ROLE" = exit ] && ROLE_RU="выход"
-c_ok "Ключ подошёл: узел «$NODE_NAME», роль: $ROLE_RU, Xray $XRAY_VER"
+c_ok "Ключ подошёл: узел «${NODE_NAME}», роль: $ROLE_RU, Xray $XRAY_VER"
 if [ -n "$ROLE" ] && [ "$ROLE" != "$NODE_ROLE" ]; then
-  die "этот ключ выдан для роли «$NODE_ROLE», а скрипт запущен для «$ROLE». Проверь ключ."
+  die "этот ключ выдан для роли «${NODE_ROLE}», а скрипт запущен для «${ROLE}». Проверь ключ."
 fi
 
 # Предупреждаем о том, что может занять те же порты
@@ -240,7 +242,7 @@ echo
 python3 "$AGENT_PY" status || true
 echo
 if [ "$SYNC_OK" = 1 ]; then
-  c_ok "Узел «$NODE_NAME» готов. Через минуту он появится в админке как работающий."
+  c_ok "Узел «${NODE_NAME}» готов. Через минуту он появится в админке как работающий."
 else
   c_warn "Агент установлен, но узел пока не работает. Причина выше, подробности: journalctl -u savebit-agent -f"
 fi
