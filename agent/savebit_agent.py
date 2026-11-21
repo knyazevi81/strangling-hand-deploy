@@ -788,6 +788,12 @@ def cmd_status(args):
 
 
 def main():
+    # на серверах с LANG=C консоль не в UTF-8: русские сообщения не должны ронять агента
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(prog="savebit-agent", description="Агент узла Savebit VPN")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("run", help="работать постоянно (так запускает systemd)")
