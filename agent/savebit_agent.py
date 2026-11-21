@@ -430,7 +430,8 @@ def substitute_placeholders(obj):
 
 
 def access_log_enabled(cfg):
-    return bool(((cfg or {}).get("log") or {}).get("access"))
+    path = ((cfg or {}).get("log") or {}).get("access")
+    return bool(path) and path != "none"
 
 
 def ensure_log_dir():

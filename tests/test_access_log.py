@@ -57,6 +57,7 @@ with open(a.ACCESS_LOG, "a") as f:
 a.read_access_log(state, cfg)
 check("большой журнал обрезается", os.path.getsize(a.ACCESS_LOG) == 0 and state["access_offset"] == 0)
 check("сбор выключен — журнал удаляется", a.read_access_log(state, {}) is None and not os.path.exists(a.ACCESS_LOG))
+check("access: none — журнал выключен", not a.access_log_enabled({"log": {"access": "none"}}))
 check("плейсхолдер папки журнала", a.substitute_placeholders({"log": {"access": "${LOG_DIR}/access.log"}})["log"]["access"] == a.ACCESS_LOG)
 
 print("Итого: провалено %d" % fails)
