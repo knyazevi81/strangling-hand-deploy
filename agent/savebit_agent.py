@@ -541,9 +541,10 @@ def xray_api_addr(cfg):
     return api.get("listen")
 
 
-def xray_api(addr, *args):
+def xray_api(addr, command, *args):
+    # флаги Go должны идти до позиционных аргументов, поэтому --server сразу после команды
     try:
-        code, out = run([XRAY_BIN, "api"] + list(args) + ["--server=" + addr], timeout=15, env=xray_env())
+        code, out = run([XRAY_BIN, "api", command, "--server=" + addr] + list(args), timeout=15, env=xray_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out if code == 0 else None
