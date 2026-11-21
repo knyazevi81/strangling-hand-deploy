@@ -32,7 +32,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.2.1"
 
 # SAVEBIT_ROOT нужен только для тестов: все пути уходят в отдельный каталог.
 ROOT = os.environ.get("SAVEBIT_ROOT", "").rstrip("/")
@@ -98,7 +98,7 @@ def log(msg):
 def read_env(path=ENV_FILE):
     env = {}
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -116,7 +116,7 @@ def write_env(api, key, path=ENV_FILE, via=None):
         via = read_env(path).get("SAVEBIT_API_VIA", "")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write("# Создано savebit-agent. Ключ меняется командой: savebit-agent rekey НОВЫЙ_КЛЮЧ\n")
         f.write("SAVEBIT_API=%s\n" % api)
         f.write("SAVEBIT_NODE_KEY=%s\n" % key)
@@ -129,7 +129,7 @@ def write_env(api, key, path=ENV_FILE, via=None):
 
 def load_state():
     try:
-        with open(STATE_FILE) as f:
+        with open(STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, ValueError):
         return {}
@@ -138,7 +138,7 @@ def load_state():
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
     os.replace(tmp, STATE_FILE)
 
@@ -435,13 +435,19 @@ def access_log_enabled(cfg):
 
 
 def ensure_log_dir():
-    """Xray работает от пользователя savebit и сам создаёт файл журнала в этой папке."""
+    """Папка и файл журнала принадлежат savebit: от него работает служба Xray.
+    Файл создаём заранее и чиним владельца: «xray -test» агент запускает от root, и Xray
+    успевает создать журнал от root — тогда служба не может его открыть (permission denied)."""
     os.makedirs(LOG_DIR, exist_ok=True)
     os.chmod(LOG_DIR, 0o750)
-    try:
-        shutil.chown(LOG_DIR, user=SERVICE_GROUP, group=SERVICE_GROUP)
-    except (LookupError, PermissionError, OSError):
-        pass
+    if not os.path.exists(ACCESS_LOG):
+        open(ACCESS_LOG, "a").close()
+    os.chmod(ACCESS_LOG, 0o640)
+    for path in (LOG_DIR, ACCESS_LOG):
+        try:
+            shutil.chown(path, user=SERVICE_GROUP, group=SERVICE_GROUP)
+        except (LookupError, PermissionError, OSError):
+            pass
 
 
 # ── Журнал соединений: кто, откуда и куда ─────────────────────────────────────
@@ -529,6 +535,9 @@ def xray_env():
 
 def test_config(path):
     code, out = run([XRAY_BIN, "run", "-test", "-c", path], timeout=60, env=xray_env())
+    # -test от root открывает журнал соединений: возвращаем файл пользователю savebit
+    if os.path.exists(ACCESS_LOG):
+        ensure_log_dir()
     if code != 0 or "Configuration OK" not in out:
         raise AgentError("конфиг не прошёл проверку xray -test:\n" + tail(out, 8))
 
@@ -553,7 +562,7 @@ def apply_config(cfg, force_restart=False):
     os.makedirs(CONFIG_DIR, exist_ok=True)
     body = json.dumps(cfg, indent=2, ensure_ascii=False, sort_keys=True)
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             same = f.read() == body
     except FileNotFoundError:
         same = False
@@ -563,7 +572,7 @@ def apply_config(cfg, force_restart=False):
     if access_log_enabled(cfg):
         ensure_log_dir()
     new = CONFIG_DIR + "/config.new.json"  # Xray узнаёт формат по расширению
-    with open(new, "w") as f:
+    with open(new, "w", encoding="utf-8") as f:
         f.write(body)
     chown_group(new, 0o640)
     try:
@@ -634,7 +643,7 @@ def open_firewall(ports):
 def host_info():
     info = {"hostname": socket.gethostname(), "kernel": platform.release(), "cpus": os.cpu_count()}
     try:
-        with open("/etc/os-release") as f:
+        with open("/etc/os-release", encoding="utf-8") as f:
             m = re.search(r'^PRETTY_NAME="?([^"\n]+)', f.read(), re.M)
             info["os"] = m.group(1) if m else None
     except OSError:
@@ -823,7 +832,7 @@ def sync_once(api, key, verbose=False):
 
     cfg = None
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
     except (FileNotFoundError, ValueError):
         pass
@@ -978,7 +987,7 @@ def cmd_status(args):
     print("Синхронизация:  %s" % ts(st.get("last_sync")))
     print("Ошибка:         %s" % (st.get("last_error") or "нет"))
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             on = access_log_enabled(json.load(f))
     except (OSError, ValueError):
         on = False

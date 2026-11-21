@@ -58,6 +58,14 @@ a.read_access_log(state, cfg)
 check("большой журнал обрезается", os.path.getsize(a.ACCESS_LOG) == 0 and state["access_offset"] == 0)
 check("сбор выключен — журнал удаляется", a.read_access_log(state, {}) is None and not os.path.exists(a.ACCESS_LOG))
 check("access: none — журнал выключен", not a.access_log_enabled({"log": {"access": "none"}}))
+a.ensure_log_dir()
+check("ensure_log_dir создаёт файл журнала заранее (0640)", os.path.exists(a.ACCESS_LOG) and oct(os.stat(a.ACCESS_LOG).st_mode & 0o777) == "0o640")
+os.remove(a.ACCESS_LOG)
+# LANG=C: запись состояния с русским текстом не должна падать
+import subprocess
+r = subprocess.run([sys.executable, "-c", "import importlib.util,os;s=importlib.util.spec_from_file_location('a','%s');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.save_state({'last_error':'\\u043e\\u0448\\u0438\\u0431\\u043a\\u0430'});print(len(m.load_state()['last_error']))" % os.path.join(HERE, "..", "agent", "savebit_agent.py")],
+                   env={**os.environ, "LANG": "C", "LC_ALL": "C", "PYTHONIOENCODING": "latin-1", "PYTHONUTF8": "0"}, capture_output=True)
+check("состояние с русским текстом сохраняется при LANG=C", r.returncode == 0)
 check("плейсхолдер папки журнала", a.substitute_placeholders({"log": {"access": "${LOG_DIR}/access.log"}})["log"]["access"] == a.ACCESS_LOG)
 
 print("Итого: провалено %d" % fails)
