@@ -79,6 +79,7 @@ savebit-agent rekey sbn_НОВЫЙ_КЛЮЧ
 | `savebit-agent check` | проверить ключ и API, ничего не меняя |
 | `savebit-agent rekey КЛЮЧ` | заменить ключ |
 | `savebit-agent set-via ВХОД:9443` / `off` | ходить в API через туннель на входе / напрямую |
+| `savebit-agent update` | обновить агента из этого репозитория и перезапустить (с версии 0.2.0) |
 | `savebit-agent --help` | все команды |
 | `journalctl -u savebit-agent -f` | журнал агента |
 | `journalctl -u savebit-xray -f` | журнал Xray |
@@ -93,6 +94,7 @@ savebit-agent rekey sbn_НОВЫЙ_КЛЮЧ
 | `/etc/savebit/xray/config.json` | текущий конфиг Xray (присылает API) |
 | `/etc/savebit/tls/` | самоподписанные сертификаты для Hysteria2, создаются по запросу API |
 | `/var/lib/savebit/state.json` | ревизия, время синхронизации, последняя ошибка |
+| `/var/lib/savebit/xray-log/access.log` | журнал соединений Xray, если в админке включён сбор IP или доменов; агент читает и обрезает его |
 | `savebit-agent.service` | агент, root |
 | `savebit-xray.service` | Xray от пользователя `savebit`, с правом слушать порты ниже 1024 |
 | `/etc/sysctl.d/99-savebit.conf` | BBR и большие буферы для QUIC |
@@ -110,6 +112,17 @@ savebit-agent rekey sbn_НОВЫЙ_КЛЮЧ
 Контракт для бэкенда: [docs/agent-api.md](docs/agent-api.md). Примеры конфигов: [examples/entry.json](examples/entry.json),
 [examples/exit.json](examples/exit.json). Оба проверены на Xray 26.11.9: цепочка клиент → вход → выход работает по всем
 трём профилям, а при отказе канала XHTTP вход сам переключается на Hysteria2.
+
+## Обновление агента
+
+С версии 0.2.0: `sudo savebit-agent update`. На узлах с агентом 0.1.0 (там этой команды ещё нет) — один раз так:
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/knyazevi81/strangling-hand-deploy/main/agent/savebit_agent.py \
+  -o /opt/savebit/agent/savebit_agent.py && sudo systemctl restart savebit-agent && savebit-agent version
+```
+
+Конфиг, ключ и Xray при этом не трогаются.
 
 ## Удаление
 

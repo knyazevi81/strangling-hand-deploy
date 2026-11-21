@@ -32,7 +32,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-AGENT_VERSION = "0.1.0"
+AGENT_VERSION = "0.2.0"
 
 # SAVEBIT_ROOT нужен только для тестов: все пути уходят в отдельный каталог.
 ROOT = os.environ.get("SAVEBIT_ROOT", "").rstrip("/")
@@ -50,6 +50,11 @@ XRAY_BIN = XRAY_CURRENT + "/xray"
 CONFIG_DIR = _p("/etc/savebit/xray")
 CONFIG_FILE = CONFIG_DIR + "/config.json"
 TLS_DIR = _p("/etc/savebit/tls")
+# журнал соединений Xray: пишет служба Xray, читает и обрезает агент
+LOG_DIR = _p("/var/lib/savebit/xray-log")
+ACCESS_LOG = LOG_DIR + "/access.log"
+ACCESS_LOG_MAX = 4 * 1024 * 1024   # больше — обрезаем после чтения
+ACCESS_TOP_DOMAINS, ACCESS_TOP_IPS = 150, 40
 
 XRAY_SERVICE = "savebit-xray"
 AGENT_SERVICE = "savebit-agent"
@@ -60,6 +65,8 @@ API_PREFIX = os.environ.get("SAVEBIT_API_PREFIX", "/api/v1/agent")
 DEFAULT_INTERVAL = 60
 MIN_INTERVAL, MAX_INTERVAL = 15, 3600
 
+REPO_RAW = os.environ.get("SAVEBIT_REPO_RAW",
+                          "https://raw.githubusercontent.com/knyazevi81/strangling-hand-deploy/main")
 GITHUB_RELEASE = "https://github.com/XTLS/Xray-core/releases/download/v{ver}/Xray-linux-{arch}.zip"
 ARCH_MAP = {
     "x86_64": "64", "amd64": "64",
@@ -67,6 +74,7 @@ ARCH_MAP = {
     "armv7l": "arm32-v7a",
 }
 TLS_PLACEHOLDER = "${TLS_DIR}"
+LOG_PLACEHOLDER = "${LOG_DIR}"
 
 
 class AgentError(Exception):
@@ -416,9 +424,98 @@ def substitute_placeholders(obj):
         return {k: substitute_placeholders(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [substitute_placeholders(v) for v in obj]
-    if isinstance(obj, str) and TLS_PLACEHOLDER in obj:
-        return obj.replace(TLS_PLACEHOLDER, TLS_DIR)
+    if isinstance(obj, str):
+        return obj.replace(TLS_PLACEHOLDER, TLS_DIR).replace(LOG_PLACEHOLDER, LOG_DIR)
     return obj
+
+
+def access_log_enabled(cfg):
+    return bool(((cfg or {}).get("log") or {}).get("access"))
+
+
+def ensure_log_dir():
+    """Xray работает от пользователя savebit и сам создаёт файл журнала в этой папке."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.chmod(LOG_DIR, 0o750)
+    try:
+        shutil.chown(LOG_DIR, user=SERVICE_GROUP, group=SERVICE_GROUP)
+    except (LookupError, PermissionError, OSError):
+        pass
+
+
+# ── Журнал соединений: кто, откуда и куда ─────────────────────────────────────
+
+_ACCESS_RE = re.compile(
+    r"from (?:(?:tcp|udp):)?(\[[0-9a-fA-F:]+\]|[0-9.]+|[0-9a-fA-F:]+):\d+ accepted "
+    r"(?:tcp|udp):(\[[^\]]+\]|[^ ]+?):\d+ \[[^\]]*\](?: email: (\S+))?")
+_IP_RE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:]*)$")
+_TWO_LEVEL = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.jp", "ne.jp", "com.br",
+    "com.tr", "com.ru", "net.ru", "org.ru", "msk.ru", "spb.ru", "pp.ua", "com.ua", "co.il", "co.kr",
+    "com.cn", "com.tw", "com.hk", "co.in", "co.za", "com.kz", "co.nz", "com.mx", "com.ar", "com.sg",
+}
+
+
+def base_domain(host):
+    """rr3---sn-abc.googlevideo.com → googlevideo.com; для IP — None."""
+    host = (host or "").strip("[]").rstrip(".").lower()
+    if not host or _IP_RE.match(host) or "." not in host:
+        return None
+    labels = host.split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in _TWO_LEVEL:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def parse_access_lines(lines):
+    """Сводка по друзьям: {email: {"ips": {ip: n}, "domains": {domain: n}}}. Служебные каналы relay:… не считаем."""
+    users = {}
+    for line in lines:
+        m = _ACCESS_RE.search(line)
+        if not m or not m.group(3) or m.group(3).startswith("relay:"):
+            continue
+        ip, dest, email = m.group(1).strip("[]"), m.group(2), m.group(3)
+        u = users.setdefault(email, {"ips": {}, "domains": {}})
+        u["ips"][ip] = u["ips"].get(ip, 0) + 1
+        d = base_domain(dest)
+        if d:
+            u["domains"][d] = u["domains"].get(d, 0) + 1
+    for u in users.values():
+        u["ips"] = dict(sorted(u["ips"].items(), key=lambda kv: -kv[1])[:ACCESS_TOP_IPS])
+        u["domains"] = dict(sorted(u["domains"].items(), key=lambda kv: -kv[1])[:ACCESS_TOP_DOMAINS])
+    return users
+
+
+def read_access_log(state, cfg):
+    """Читает новое с прошлого раза. Сбор выключен — удаляет журнал. Возвращает сводку или None."""
+    if not access_log_enabled(cfg):
+        state.pop("access_offset", None)
+        try:
+            os.remove(ACCESS_LOG)
+        except OSError:
+            pass
+        return None
+    try:
+        size = os.path.getsize(ACCESS_LOG)
+    except OSError:
+        return {"users": {}, "lines": 0}
+    offset = state.get("access_offset", 0)
+    if offset > size:  # файл обрезали или пересоздали
+        offset = 0
+    with open(ACCESS_LOG, "rb") as f:
+        f.seek(offset)
+        data = f.read()
+    # незаконченную последнюю строку дочитаем в следующий раз
+    end = data.rfind(b"\n") + 1
+    lines = data[:end].decode("utf-8", "replace").splitlines()
+    offset += end
+    if offset >= ACCESS_LOG_MAX:
+        # Xray пишет в конец файла, поэтому обрезать можно на ходу
+        with open(ACCESS_LOG, "r+b") as f:
+            f.truncate(0)
+        offset = 0
+    state["access_offset"] = offset
+    return {"users": parse_access_lines(lines), "lines": len(lines)}
 
 
 # ── Применение конфига ─────────────────────────────────────────────────────────
@@ -462,6 +559,8 @@ def apply_config(cfg, force_restart=False):
     if same and not force_restart and service_active(XRAY_SERVICE):
         return False
 
+    if access_log_enabled(cfg):
+        ensure_log_dir()
     new = CONFIG_DIR + "/config.new.json"  # Xray узнаёт формат по расширению
     with open(new, "w") as f:
         f.write(body)
@@ -649,6 +748,11 @@ def balancer_choice(cfg):
 
 
 def build_report(state, cfg, error=None):
+    try:
+        access = read_access_log(state, cfg)
+    except Exception as e:  # журнал не должен ломать отчёт
+        access = None
+        log("журнал соединений не прочитан: %r" % e)
     probes = []
     for t in outbound_targets(cfg or {}):
         if t["proto"] == "tcp" and t["address"] and t["port"]:
@@ -668,6 +772,7 @@ def build_report(state, cfg, error=None):
         "probes": probes,
         "balancers": balancer_choice(cfg or {}),
         "traffic": traffic_and_online(cfg or {}),
+        "access": access,
         "host": host_info(),
     }
 
@@ -836,6 +941,25 @@ def cmd_set_via(args):
     print("API теперь %s, агент перезапущен." % ("через " + via if via else "напрямую"))
 
 
+def cmd_update(args):
+    """Скачивает свежего агента из репозитория, проверяет, что он запускается, и перезапускает службу."""
+    url = (args.url or REPO_RAW.rstrip("/") + "/agent/savebit_agent.py")
+    me = os.path.realpath(__file__)
+    data = http_get_raw(url, timeout=60)
+    new = me + ".new"
+    with open(new, "wb") as f:
+        f.write(data)
+    code, out = run([sys.executable, new, "version"], timeout=30)
+    if code != 0 or not out.strip():
+        os.remove(new)
+        sys.exit("Скачанный агент не запускается, оставляю прежний:\n" + tail(out))
+    version = out.strip().splitlines()[-1]
+    os.chmod(new, 0o755)
+    os.replace(new, me)
+    systemctl("restart", AGENT_SERVICE, timeout=30)
+    print("Агент обновлён: %s → %s, служба перезапущена." % (AGENT_VERSION, version))
+
+
 def cmd_status(args):
     env = read_env()
     st = load_state()
@@ -852,6 +976,12 @@ def cmd_status(args):
     print("Агент:          служба %s" % ("работает" if service_active(AGENT_SERVICE) else "НЕ работает"))
     print("Синхронизация:  %s" % ts(st.get("last_sync")))
     print("Ошибка:         %s" % (st.get("last_error") or "нет"))
+    try:
+        with open(CONFIG_FILE) as f:
+            on = access_log_enabled(json.load(f))
+    except (OSError, ValueError):
+        on = False
+    print("Журнал IP/доменов: %s" % ("включён (%s)" % ACCESS_LOG if on else "выключен"))
     for name, t in (st.get("tls") or {}).items():
         print("Сертификат %s: %s" % (name, t.get("sha256")))
 
@@ -880,12 +1010,15 @@ def main():
     p = sub.add_parser("set-via", help="ходить в API через туннель на входе (хост:порт) или напрямую (off)")
     p.add_argument("via")
     sub.add_parser("version", help="версия агента")
+    p = sub.add_parser("update", help="обновить агента из репозитория и перезапустить")
+    p.add_argument("--url", help="откуда скачать savebit_agent.py")
     args = ap.parse_args()
     if args.cmd == "version":
         print(AGENT_VERSION)
         return
     handlers = {"run": cmd_run, "sync": cmd_sync, "status": cmd_status, "check": cmd_check,
-                "rekey": cmd_rekey, "set-api": cmd_set_api, "set-via": cmd_set_via}
+                "rekey": cmd_rekey, "set-api": cmd_set_api, "set-via": cmd_set_via,
+                "update": cmd_update}
     if args.cmd not in handlers:
         ap.print_help()
         sys.exit(1)

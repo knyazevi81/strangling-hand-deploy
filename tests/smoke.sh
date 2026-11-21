@@ -156,5 +156,8 @@ PY
 step "9. Статус"
 "${AGENT[@]}" status | sed 's/^/     /'
 
+echo; echo "== Журнал соединений"
+if python3 "$HERE/tests/test_access_log.py" >/tmp/smoke-access.txt 2>&1; then ok "разбор журнала IP и доменов"; else bad "разбор журнала IP и доменов"; cat /tmp/smoke-access.txt; fi
+
 echo; echo "Итого: пройдено $PASS, провалено $FAIL"
 [ "$FAIL" = 0 ]
