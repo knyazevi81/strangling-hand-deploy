@@ -10,6 +10,8 @@
 #   --key КЛЮЧ          ключ узла из админки net.savebit.ru
 #   --api ДОМЕН         адрес API, по умолчанию api.savebit.ru
 #   --role entry|exit   проверить, что ключ выдан именно для этой роли
+#   --via ХОСТ:ПОРТ     ходить в API через туннель на входе (если API с этого сервера
+#                       недоступен напрямую), например --via 146.185.211.176:9443
 #   --yes               не задавать вопросов, если всё указано
 #   --uninstall         удалить агента и Xray (конфиги и ключ остаются)
 #   --purge             вместе с --uninstall удалить и /etc/savebit
@@ -24,7 +26,7 @@ ETC=/etc/savebit
 ENV_FILE="$ETC/agent.env"
 SERVICE_USER=savebit
 
-KEY="" API="" ROLE="" YES=0 UNINSTALL=0 PURGE=0
+KEY="" API="" ROLE="" VIA="" YES=0 UNINSTALL=0 PURGE=0
 
 c_ok()   { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 c_warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
@@ -35,10 +37,11 @@ while [ $# -gt 0 ]; do
     --key) KEY="${2:-}"; shift ;;
     --api) API="${2:-}"; shift ;;
     --role) ROLE="${2:-}"; shift ;;
+    --via) VIA="${2:-}"; shift ;;
     --yes|-y) YES=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --purge) PURGE=1 ;;
-    -h|--help) sed -n '2,18p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "непонятный параметр: $1" ;;
   esac
   shift
@@ -125,15 +128,20 @@ mv -f "$AGENT_PY.new" "$AGENT_PY"
 ln -sf "$AGENT_PY" /usr/local/bin/savebit-agent
 
 # ── Проверка ключа ────────────────────────────────────────────────────────────
-c_ok "Проверяю ключ на $API"
+if [ -n "$VIA" ]; then c_ok "Проверяю ключ на $API (через вход $VIA)"; else c_ok "Проверяю ключ на $API"; fi
 set +e
-NODE_JSON="$(python3 "$AGENT_PY" check --api "$API" --key "$KEY")"
+NODE_JSON="$(python3 "$AGENT_PY" check --api "$API" --key "$KEY" --via "${VIA:-off}")"
 rc=$?
 set -e
 case $rc in
   0) ;;
   2) die "API не принял ключ. Проверь его в админке или выпусти новый." ;;
-  3) die "API $API недоступен с этого сервера: $NODE_JSON" ;;
+  3) if [ -z "$VIA" ]; then
+       die "API $API недоступен с этого сервера: $NODE_JSON
+   Если это выход, а напрямую до API не достучаться, укажи туннель на входе: --via АДРЕС_ВХОДА:9443"
+     fi
+     die "API недоступен и через вход: $NODE_JSON
+   Проверь, что вход онлайн и в группе безопасности открыт TCP-порт туннеля." ;;
   *) die "не удалось получить настройки узла: $NODE_JSON" ;;
 esac
 NODE_NAME="$(printf '%s' "$NODE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
@@ -166,6 +174,7 @@ cat > "$ENV_FILE" <<EOF
 SAVEBIT_API=$API
 SAVEBIT_NODE_KEY=$KEY
 EOF
+[ -n "$VIA" ] && printf 'SAVEBIT_API_VIA=%s\n' "$VIA" >> "$ENV_FILE"
 umask 022
 
 cat > /etc/sysctl.d/99-savebit.conf <<'EOF'

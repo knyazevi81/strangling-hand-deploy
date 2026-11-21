@@ -151,3 +151,12 @@ hysteria2://<auth>@in1.savebit.ru:443?sni=<cn>&obfs=salamander&obfs-password=<п
 ```
 
 Публичный ключ REALITY для ссылок считается из приватного (`xray x25519 -i <privateKey>`), хранить можно оба.
+
+
+## Выход не видит API напрямую
+
+Бывает, что хостинг выхода и хостинг API режут друг друга (так у firstbyte и Timeweb). Тогда выход ходит в API через вход:
+
+- на каждом входе в конфиге есть inbound `agent-relay` (dokodemo-door, TCP `agent_relay_port`, по умолчанию 9443), который пробрасывает TCP на `api.savebit.ru:443`;
+- агент выхода подключается к `ВХОД:9443`, но TLS устанавливает с `api.savebit.ru`: SNI и проверка сертификата сквозные, вход видит только шифрованный поток;
+- включается так: `install.sh --via ВХОД:9443` при установке или `savebit-agent set-via ВХОД:9443` потом; выключается `savebit-agent set-via off`. Хранится в `SAVEBIT_API_VIA` в `/etc/savebit/agent.env`.

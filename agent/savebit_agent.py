@@ -13,6 +13,7 @@
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -22,6 +23,7 @@ import re
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -100,13 +102,19 @@ def read_env(path=ENV_FILE):
     return env
 
 
-def write_env(api, key, path=ENV_FILE):
+def write_env(api, key, path=ENV_FILE, via=None):
+    """via=None: оставить как было; via="": убрать."""
+    if via is None:
+        via = read_env(path).get("SAVEBIT_API_VIA", "")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.write("# Создано savebit-agent. Ключ меняется командой: savebit-agent rekey НОВЫЙ_КЛЮЧ\n")
         f.write("SAVEBIT_API=%s\n" % api)
         f.write("SAVEBIT_NODE_KEY=%s\n" % key)
+        if via:
+            f.write("# API через вход (когда напрямую не достучаться): savebit-agent set-via off\n")
+            f.write("SAVEBIT_API_VIA=%s\n" % via)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 
@@ -179,7 +187,46 @@ def http_get_raw(url, headers=None, timeout=120):
         raise AgentError("не удалось скачать %s: %s" % (url, e))
 
 
-def api_request(api, key, method, path, body=None, etag=None, timeout=20):
+def parse_via(via):
+    """«хост:порт» → (хост, порт) или None."""
+    via = (via or "").strip()
+    if not via or via.lower() in ("off", "no", "none", "-"):
+        return None
+    host, sep, port = via.rpartition(":")
+    if not sep or not host or not port.isdigit() or not 0 < int(port) < 65536:
+        raise AgentError("SAVEBIT_API_VIA должен быть вида хост:порт, а не %r" % via)
+    return host.strip("[]"), int(port)
+
+
+def api_via():
+    return parse_via(os.environ.get("SAVEBIT_API_VIA") or read_env().get("SAVEBIT_API_VIA"))
+
+
+class _ViaHTTPSConnection(http.client.HTTPSConnection):
+    """TCP-соединение идёт на туннель входа, а TLS (SNI и проверка сертификата) — до самого API.
+    Вход видит только зашифрованный поток и подменить ответы не может."""
+    via = None
+
+    def connect(self):
+        sock = socket.create_connection(self.via, self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def _urlopen(req, timeout, via=None):
+    if not via:
+        return urllib.request.urlopen(req, timeout=timeout)
+    ctx = ssl.create_default_context()
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, r):
+            conn = type("Conn", (_ViaHTTPSConnection,), {"via": via})
+            return self.do_open(conn, r, context=ctx)
+
+    # системный прокси тут не нужен: соединение и так идёт на туннель входа
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), Handler(context=ctx)).open(req, timeout=timeout)
+
+
+def api_request(api, key, method, path, body=None, etag=None, timeout=20, via=False):
     url = api.rstrip("/") + API_PREFIX + path
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -190,8 +237,14 @@ def api_request(api, key, method, path, body=None, etag=None, timeout=20):
         req.add_header("Content-Type", "application/json")
     if etag:
         req.add_header("If-None-Match", '"%s"' % etag)
+    if via is False:
+        via = api_via()
+    elif isinstance(via, str):
+        via = parse_via(via)
+    if via and not url.startswith("https://"):
+        raise AgentError("туннель через вход работает только с https-адресом API")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _urlopen(req, timeout, via) as r:
             raw = r.read()
             return r.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:
@@ -205,13 +258,14 @@ def api_request(api, key, method, path, body=None, etag=None, timeout=20):
             detail = ""
         raise AgentError("API ответил HTTP %d на %s %s %s" % (e.code, method, path, detail))
     except (urllib.error.URLError, socket.timeout, OSError) as e:
-        raise ApiUnavailable("API недоступен (%s): %s" % (api, getattr(e, "reason", e)))
+        how = " через %s:%s" % via if via else ""
+        raise ApiUnavailable("API недоступен (%s%s): %s" % (api, how, getattr(e, "reason", e)))
     except ValueError:
         raise AgentError("API вернул не JSON на %s %s" % (method, path))
 
 
-def fetch_config(api, key, etag=None):
-    code, payload = api_request(api, key, "GET", "/config", etag=etag)
+def fetch_config(api, key, etag=None, via=False):
+    code, payload = api_request(api, key, "GET", "/config", etag=etag, via=via)
     if code == 304:
         return None
     validate_payload(payload)
@@ -715,10 +769,10 @@ def cmd_sync(args):
     sys.exit(1 if error else 0)
 
 
-def check_key(api, key):
+def check_key(api, key, via=False):
     """Проверяет ключ и печатает, какой это узел. Код выхода: 0 ок, 2 ключ не принят, 3 API недоступен."""
     try:
-        p = fetch_config(api, key)
+        p = fetch_config(api, key, via=via)
     except KeyRejected as e:
         print(str(e))
         return 2, None
@@ -739,7 +793,7 @@ def cmd_check(args):
     key = args.key or env.get("SAVEBIT_NODE_KEY")
     if not key:
         sys.exit("нужен ключ: --key")
-    code, _ = check_key(api, key)
+    code, _ = check_key(api, key, via=args.via if args.via is not None else False)
     sys.exit(code)
 
 
@@ -768,6 +822,20 @@ def cmd_set_api(args):
     print("Адрес API заменён на %s, агент перезапущен." % api)
 
 
+def cmd_set_via(args):
+    env = read_env()
+    api, key = env.get("SAVEBIT_API"), env.get("SAVEBIT_NODE_KEY")
+    if not (api and key):
+        sys.exit("Агент не настроен: сначала установка.")
+    via = "" if parse_via(args.via) is None else args.via.strip()
+    code, _ = check_key(api, key, via=via)
+    if code != 0:
+        sys.exit("Так API недоступен, оставляю как было.")
+    write_env(api, key, via=via)
+    systemctl("restart", AGENT_SERVICE, timeout=30)
+    print("API теперь %s, агент перезапущен." % ("через " + via if via else "напрямую"))
+
+
 def cmd_status(args):
     env = read_env()
     st = load_state()
@@ -775,7 +843,8 @@ def cmd_status(args):
 
     def ts(v):
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(v)) if v else "—"
-    print("API:            %s" % (env.get("SAVEBIT_API") or "не настроен"))
+    print("API:            %s%s" % (env.get("SAVEBIT_API") or "не настроен",
+                                 " (через %s)" % env["SAVEBIT_API_VIA"] if env.get("SAVEBIT_API_VIA") else ""))
     print("Узел:           %s (%s)" % (node.get("name", "—"), node.get("role", "—")))
     print("Ревизия:        %s, применена %s" % (st.get("revision", "—"), ts(st.get("applied_at"))))
     print("Xray:           %s, служба %s" % (installed_xray_version() or "не установлен",
@@ -802,18 +871,21 @@ def main():
     p = sub.add_parser("check", help="проверить ключ и адрес API, ничего не меняя")
     p.add_argument("--api")
     p.add_argument("--key")
+    p.add_argument("--via", help="хост:порт туннеля на входе")
     p = sub.add_parser("rekey", help="заменить ключ узла")
     p.add_argument("key")
     p.add_argument("--api")
     p = sub.add_parser("set-api", help="заменить адрес API")
     p.add_argument("api")
+    p = sub.add_parser("set-via", help="ходить в API через туннель на входе (хост:порт) или напрямую (off)")
+    p.add_argument("via")
     sub.add_parser("version", help="версия агента")
     args = ap.parse_args()
     if args.cmd == "version":
         print(AGENT_VERSION)
         return
     handlers = {"run": cmd_run, "sync": cmd_sync, "status": cmd_status, "check": cmd_check,
-                "rekey": cmd_rekey, "set-api": cmd_set_api}
+                "rekey": cmd_rekey, "set-api": cmd_set_api, "set-via": cmd_set_via}
     if args.cmd not in handlers:
         ap.print_help()
         sys.exit(1)
